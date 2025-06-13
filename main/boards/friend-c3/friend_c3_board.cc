@@ -179,8 +179,15 @@ private:
         });
 
         // 三击直接进入配网
-        boot_button_.OnMultipleClick([this]() {                       
-            ResetWifiConfiguration();
+        boot_button_.OnMultipleClick([this]() {  
+            auto& app = Application::GetInstance();
+            // 如果处于配网模式，则重启；如果其他模式，则进入配网模式
+            if (app.GetDeviceState() == kDeviceStateWifiConfiguring) {
+                app.Reboot();
+            } else {
+                ResetWifiConfiguration();
+            }
+            
         }, 3); // 三击配网
     }
 
