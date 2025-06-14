@@ -203,6 +203,9 @@ void Application::CheckNewVersion() {
             if (device_state_ == kDeviceStateIdle) {
                 break;
             }
+            if(display->width() == 0) { // 无屏，多次播报
+                ShowActivationCode();
+            }
         }
     }
 }

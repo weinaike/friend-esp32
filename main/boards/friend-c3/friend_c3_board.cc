@@ -40,15 +40,16 @@ private:
     PowerSaveTimer* power_save_timer_ = nullptr;
 
     void InitializePowerSaveTimer() {
-        power_save_timer_ = new PowerSaveTimer(-1, 60, 300);
+        power_save_timer_ = new PowerSaveTimer(-1, 180, 300);
         power_save_timer_->OnEnterSleepMode([this]() {
+            // 直接使用深度睡眠， 浅休眠的逻辑复杂，待实现
             ESP_LOGI(TAG, "Entering sleep mode");
-            _register_gpio_wakeup_light_sleep();
-            _enter_light_sleep();
+            _register_gpio_wakeup();
+            esp_deep_sleep_start();
         });
         power_save_timer_->OnExitSleepMode([this]() {
             ESP_LOGI(TAG, "Exiting sleep mode");
-            _revert_from_sleep();
+            // _revert_from_sleep();
             auto codec = GetAudioCodec();
             codec->EnableInput(true);     
             codec->SetOutputVolume(70); // 恢复音量            
@@ -165,6 +166,11 @@ private:
             ESP_LOGI(TAG, "Key button clicked, toggling chat state");
             power_save_timer_->WakeUp();
             esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+            if( cause == ESP_SLEEP_WAKEUP_GPIO) {
+                auto codec = GetAudioCodec();
+                codec->EnableInput(true);
+                codec->SetOutputVolume(70); // 恢复音量 
+            }
             auto& app = Application::GetInstance();
             if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
                 if (cause != ESP_SLEEP_WAKEUP_GPIO) {
@@ -180,6 +186,7 @@ private:
             // ESP32-C3 使用 GPIO 唤醒方式进入深度睡眠
             _register_gpio_wakeup();
             esp_deep_sleep_start();
+
         });
 
         // 三击直接进入配网
