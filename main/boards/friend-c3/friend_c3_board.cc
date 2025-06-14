@@ -40,29 +40,29 @@ private:
     PowerSaveTimer* power_save_timer_ = nullptr;
 
     void InitializePowerSaveTimer() {
-        power_save_timer_ = new PowerSaveTimer(160, 60);
+        power_save_timer_ = new PowerSaveTimer(-1, 60, 300);
         power_save_timer_->OnEnterSleepMode([this]() {
-            ESP_LOGI(TAG, "Enabling sleep mode");            
-            _register_gpio_wakeup();
-			_enter_light_sleep();
-
+            ESP_LOGI(TAG, "Entering sleep mode");
+            _register_gpio_wakeup_light_sleep();
+            _enter_light_sleep();
         });
         power_save_timer_->OnExitSleepMode([this]() {
+            ESP_LOGI(TAG, "Exiting sleep mode");
+            _revert_from_sleep();
             auto codec = GetAudioCodec();
             codec->EnableInput(true);     
-            codec->SetOutputVolume(50); // 恢复音量
-            _revert_from_sleep();       
+            codec->SetOutputVolume(70); // 恢复音量            
         });
-        power_save_timer_->SetEnabled(true);
-
-        // 关闭 这个逻辑对吗？
+        
         power_save_timer_->OnShutdownRequest([this]() {
             ESP_LOGI(TAG, "Shutdown request received");
+            // 配置GPIO唤醒源
             _register_gpio_wakeup();
-			_enter_light_sleep();
+            // 进入深度睡眠
+            esp_deep_sleep_start();
         });
 
-
+        power_save_timer_->SetEnabled(true);
     }
 
     void InitializeCodecI2c() {
@@ -97,20 +97,14 @@ private:
             display_ = nullptr;
         }
     }
-	void _wait_wakeup_gpio_inactive(void)
-	{
-		printf("Waiting for GPIO%d to go high...\n", GPIO_WAKEUP_NUM);
-		while (gpio_get_level(GPIO_WAKEUP_NUM) == GPIO_WAKEUP_LEVEL) {
-			vTaskDelay(pdMS_TO_TICKS(10));
-		}
-	}
-	esp_err_t _register_gpio_wakeup(void)
+
+	esp_err_t _register_gpio_wakeup_light_sleep(void)
 	{
 		/* Initialize GPIO */
 		gpio_config_t config = {
 				.pin_bit_mask = BIT64(GPIO_WAKEUP_NUM),
 				.mode = GPIO_MODE_INPUT,
-				.pull_up_en = GPIO_PULLUP_DISABLE,
+				.pull_up_en = GPIO_PULLUP_ENABLE,
 				.pull_down_en = GPIO_PULLDOWN_DISABLE,
 				.intr_type = GPIO_INTR_DISABLE
 		};
@@ -121,9 +115,28 @@ private:
 							TAG, "Enable gpio wakeup failed");
 		ESP_RETURN_ON_ERROR(esp_sleep_enable_gpio_wakeup(), TAG, "Configure gpio as wakeup source failed");
 	
-		/* Make sure the GPIO is inactive and it won't trigger wakeup immediately */
-		_wait_wakeup_gpio_inactive();
-		ESP_LOGI(TAG, "gpio wakeup source is ready");
+		ESP_LOGI(TAG, "gpio light sleep wakeup source is ready");
+	
+		return ESP_OK;
+	}
+
+	esp_err_t _register_gpio_wakeup(void)
+	{
+		/* Initialize GPIO */
+		gpio_config_t config = {
+				.pin_bit_mask = BIT64(GPIO_WAKEUP_NUM),
+				.mode = GPIO_MODE_INPUT,
+				.pull_up_en = GPIO_PULLUP_ENABLE,  // 启用内部上拉
+				.pull_down_en = GPIO_PULLDOWN_DISABLE,
+				.intr_type = GPIO_INTR_DISABLE
+		};
+		ESP_RETURN_ON_ERROR(gpio_config(&config), TAG, "Initialize GPIO%d failed", GPIO_WAKEUP_NUM);
+	
+		/* Enable wake up from GPIO for deep sleep */
+		ESP_RETURN_ON_ERROR(esp_deep_sleep_enable_gpio_wakeup(BIT64(GPIO_WAKEUP_NUM), ESP_GPIO_WAKEUP_GPIO_LOW),
+							TAG, "Enable gpio deep sleep wakeup failed");
+	
+		ESP_LOGI(TAG, "gpio deep sleep wakeup source is ready");
 	
 		return ESP_OK;
 	}
@@ -136,22 +149,8 @@ private:
         _deinitCodecI2c();
         _deinitDisplay();
         /* Enter sleep mode */
-        //esp_light_sleep_start();
+        esp_light_sleep_start();
 
-        /* Determine wake up reason */
-        esp_sleep_wakeup_cause_t wakeup_reason =esp_sleep_get_wakeup_cause();
-        if (wakeup_reason == ESP_SLEEP_WAKEUP_GPIO) {
-            /* Waiting for the gpio inactive, or the chip will continuously trigger wakeup*/
-            _wait_wakeup_gpio_inactive();
-        }
-        else{
-            ESP_LOGI(TAG, "wakeup source is  %d", wakeup_reason);
-        }
-
-        if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_GPIO) {
-            /* Waiting for the gpio inactive, or the chip will continuously trigger wakeup*/
-            _wait_wakeup_gpio_inactive();
-        }
     }
     void _revert_from_sleep(void)
     {
@@ -163,23 +162,29 @@ private:
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
+            ESP_LOGI(TAG, "Key button clicked, toggling chat state");
+            power_save_timer_->WakeUp();
+            esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
             auto& app = Application::GetInstance();
             if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
-                ResetWifiConfiguration();
+                if (cause != ESP_SLEEP_WAKEUP_GPIO) {
+                    ResetWifiConfiguration();
+                }
             }
             app.ToggleChatState();
         });
 
-        boot_button_.OnLongPress([this]() {
-			int64_t now = esp_timer_get_time();
-			ESP_LOGW(TAG, "Key button long pressed,  now: %lld", now);
-			_register_gpio_wakeup();
-			_enter_light_sleep();
-            _revert_from_sleep();
+        // 修正：长按直接进入深度休眠，唤醒后自动复位，无需恢复外设
+        boot_button_.OnLongPressUp([this]() {
+            ESP_LOGW(TAG, "Key button long press released, entering deep sleep mode");
+            // ESP32-C3 使用 GPIO 唤醒方式进入深度睡眠
+            _register_gpio_wakeup();
+            esp_deep_sleep_start();
         });
 
         // 三击直接进入配网
         boot_button_.OnMultipleClick([this]() {  
+            ESP_LOGI(TAG, "Key button triple clicked, entering WiFi configuration mode");
             auto& app = Application::GetInstance();
             // 如果处于配网模式，则重启；如果其他模式，则进入配网模式
             if (app.GetDeviceState() == kDeviceStateWifiConfiguring) {
