@@ -45,6 +45,7 @@ static const char* const STATE_STRINGS[] = {
     "speaking",
     "upgrading",
     "activating",
+    "audio_testing",
     "fatal_error",
     "invalid_state"
 };
@@ -293,9 +294,30 @@ void Application::PlaySound(const std::string_view& sound) {
     }
 }
 
+void Application::EnterAudioTestingMode() {
+    ESP_LOGI(TAG, "Entering audio testing mode");
+    ResetDecoder();
+    SetDeviceState(kDeviceStateAudioTesting);
+}
+
+void Application::ExitAudioTestingMode() {
+    ESP_LOGI(TAG, "Exiting audio testing mode");
+    SetDeviceState(kDeviceStateWifiConfiguring);
+    // Copy audio_testing_queue_ to audio_decode_queue_
+    std::lock_guard<std::mutex> lock(mutex_);
+    audio_decode_queue_ = std::move(audio_testing_queue_);
+    audio_decode_cv_.notify_all();
+}
+
 void Application::ToggleChatState() {
     if (device_state_ == kDeviceStateActivating) {
         SetDeviceState(kDeviceStateIdle);
+        return;
+    } else if (device_state_ == kDeviceStateWifiConfiguring) {
+        EnterAudioTestingMode();
+        return;
+    } else if (device_state_ == kDeviceStateAudioTesting) {
+        ExitAudioTestingMode();
         return;
     }
 
@@ -330,6 +352,9 @@ void Application::StartListening() {
     if (device_state_ == kDeviceStateActivating) {
         SetDeviceState(kDeviceStateIdle);
         return;
+    } else if (device_state_ == kDeviceStateWifiConfiguring) {
+        EnterAudioTestingMode();
+        return;
     }
 
     if (!protocol_) {
@@ -357,6 +382,11 @@ void Application::StartListening() {
 }
 
 void Application::StopListening() {
+    if (device_state_ == kDeviceStateAudioTesting) {
+        ExitAudioTestingMode();
+        return;
+    }
+
     const std::array<int, 3> valid_states = {
         kDeviceStateListening,
         kDeviceStateSpeaking,
@@ -827,6 +857,28 @@ void Application::OnAudioOutput() {
 }
 
 void Application::OnAudioInput() {
+    if (device_state_ == kDeviceStateAudioTesting) {
+        if (audio_testing_queue_.size() >= AUDIO_TESTING_MAX_DURATION_MS / OPUS_FRAME_DURATION_MS) {
+            ExitAudioTestingMode();
+            return;
+        }
+        std::vector<int16_t> data;
+        int samples = OPUS_FRAME_DURATION_MS * 16000 / 1000;
+        if (ReadAudio(data, 16000, samples)) {
+            background_task_->Schedule([this, data = std::move(data)]() mutable {
+                opus_encoder_->Encode(std::move(data), [this](std::vector<uint8_t>&& opus) {
+                    AudioStreamPacket packet;
+                    packet.payload = std::move(opus);
+                    packet.frame_duration = OPUS_FRAME_DURATION_MS;
+                    packet.sample_rate = 16000;
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    audio_testing_queue_.push_back(std::move(packet));
+                });
+            });
+            return;
+        }
+    }
+
     if (wake_word_->IsDetectionRunning()) {
         std::vector<int16_t> data;
         int samples = wake_word_->GetFeedSize();
@@ -837,6 +889,7 @@ void Application::OnAudioInput() {
             }
         }
     }
+
     if (audio_processor_->IsRunning()) {
         std::vector<int16_t> data;
         int samples = audio_processor_->GetFeedSize();
