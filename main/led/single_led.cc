@@ -4,7 +4,7 @@
 
 #define TAG "SingleLed"
 
-#define DEFAULT_BRIGHTNESS 4
+#define DEFAULT_BRIGHTNESS 8
 #define HIGH_BRIGHTNESS 16
 #define LOW_BRIGHTNESS 2
 

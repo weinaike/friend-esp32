@@ -185,6 +185,8 @@ private:
             ESP_LOGW(TAG, "Key button long press released, entering deep sleep mode");
             // ESP32-C3 使用 GPIO 唤醒方式进入深度睡眠
             _register_gpio_wakeup();
+            _deinitCodecI2c();
+            _deinitDisplay();
             esp_deep_sleep_start();
 
         });
