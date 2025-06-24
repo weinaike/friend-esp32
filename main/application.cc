@@ -329,13 +329,15 @@ void Application::ToggleChatState() {
     if (device_state_ == kDeviceStateIdle) {
         Schedule([this]() {
             if (!protocol_->IsAudioChannelOpened()) {
-                SetDeviceState(kDeviceStateConnecting);
+                SetDeviceState(kDeviceStateConnecting);             
                 if (!protocol_->OpenAudioChannel()) {
                     return;
                 }
             }
 
             SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
+
+            protocol_->SendWakeWordDetected("你好"); // 连接后，主动发起对话
         });
     } else if (device_state_ == kDeviceStateSpeaking) {
         Schedule([this]() {
