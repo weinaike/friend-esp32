@@ -14,7 +14,7 @@
 #include <esp_log.h>
 #include <esp_efuse_table.h>
 #include <driver/i2c_master.h>
-
+#include <driver/rtc_io.h>
 #include "esp_sleep.h"
 
 	
@@ -36,22 +36,20 @@ private:
     i2c_master_bus_handle_t codec_i2c_bus_;
     Display* display_ = nullptr;
     Button boot_button_;
-    // bool press_to_talk_enabled_ = false; // 删除 按下说话模式 与 点击说话模式 的区分
+
     PowerSaveTimer* power_save_timer_ = nullptr;
 
     void InitializePowerSaveTimer() {
-        power_save_timer_ = new PowerSaveTimer(-1, 180, 300);
+
+        power_save_timer_ = new PowerSaveTimer(-1, 60, 300);
         power_save_timer_->OnEnterSleepMode([this]() {
-            // 直接使用深度睡眠， 浅休眠的逻辑复杂，待实现
-            ESP_LOGI(TAG, "Entering sleep mode");
-            _register_gpio_wakeup();
-            esp_deep_sleep_start();
+            ESP_LOGI(TAG, "Enabling sleep mode");            
+            auto codec = GetAudioCodec();
+            codec->EnableInput(false);
         });
         power_save_timer_->OnExitSleepMode([this]() {
-            ESP_LOGI(TAG, "Exiting sleep mode");
-            // _revert_from_sleep();
             auto codec = GetAudioCodec();
-            codec->EnableInput(true);     
+            codec->EnableInput(true);
             codec->SetOutputVolume(70); // 恢复音量            
         });
         
@@ -82,49 +80,25 @@ private:
         };
         ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_cfg, &codec_i2c_bus_));
     }
-    void _deinitCodecI2c(void) {
-    }
     void InitializeDisplay() {
         if (display_) {
-            ESP_LOGW(TAG, "Display already initialized, skipping.");
-            return;
-        }
-        display_ = new NoDisplay(); 
-    }
-
-    void _deinitDisplay(void) {
-        if (display_) {
+            ESP_LOGW(TAG, "Display already exists, cleaning up first");
             delete display_;
             display_ = nullptr;
         }
+        display_ = new NoDisplay();
+        ESP_LOGI(TAG, "Display initialized");
     }
-
-	esp_err_t _register_gpio_wakeup_light_sleep(void)
-	{
-		/* Initialize GPIO */
-		gpio_config_t config = {
-				.pin_bit_mask = BIT64(GPIO_WAKEUP_NUM),
-				.mode = GPIO_MODE_INPUT,
-				.pull_up_en = GPIO_PULLUP_ENABLE,
-				.pull_down_en = GPIO_PULLDOWN_DISABLE,
-				.intr_type = GPIO_INTR_DISABLE
-		};
-		ESP_RETURN_ON_ERROR(gpio_config(&config), TAG, "Initialize GPIO%d failed", GPIO_WAKEUP_NUM);
-	
-		/* Enable wake up from GPIO */
-		ESP_RETURN_ON_ERROR(gpio_wakeup_enable(GPIO_WAKEUP_NUM, GPIO_INTR_LOW_LEVEL),
-							TAG, "Enable gpio wakeup failed");
-		ESP_RETURN_ON_ERROR(esp_sleep_enable_gpio_wakeup(), TAG, "Configure gpio as wakeup source failed");
-	
-		ESP_LOGI(TAG, "gpio light sleep wakeup source is ready");
-	
-		return ESP_OK;
-	}
 
 	esp_err_t _register_gpio_wakeup(void)
 	{
+
+        // const int wakeup_time_sec = 20;
+        // ESP_LOGI(TAG, "Enabling timer wakeup, %ds\n", wakeup_time_sec);
+        // ESP_ERROR_CHECK(esp_sleep_enable_timer_wakeup(wakeup_time_sec * 1000000));
+
 		/* Initialize GPIO */
-		gpio_config_t config = {
+		const gpio_config_t config = {
 				.pin_bit_mask = BIT64(GPIO_WAKEUP_NUM),
 				.mode = GPIO_MODE_INPUT,
 				.pull_up_en = GPIO_PULLUP_ENABLE,  // 启用内部上拉
@@ -141,41 +115,12 @@ private:
 	
 		return ESP_OK;
 	}
-    void _enter_light_sleep(void)
-    {
-        auto codec = GetAudioCodec();
-        codec->EnableInput(false);
-        //gpio_hold_dis(MCU_VCC_CTL);
-        //gpio_set_level(MCU_VCC_CTL, 0);
-        _deinitCodecI2c();
-        _deinitDisplay();
-        /* Enter sleep mode */
-        esp_light_sleep_start();
-
-    }
-    void _revert_from_sleep(void)
-    {
-        InitializeCodecI2c();
-        InitializeDisplay();
-        InitializeIot();
-    }
-	
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            ESP_LOGI(TAG, "Key button clicked, toggling chat state");
-            power_save_timer_->WakeUp();
-            esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-            if( cause == ESP_SLEEP_WAKEUP_GPIO) {
-                auto codec = GetAudioCodec();
-                codec->EnableInput(true);
-                codec->SetOutputVolume(70); // 恢复音量 
-            }
             auto& app = Application::GetInstance();
             if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
-                if (cause != ESP_SLEEP_WAKEUP_GPIO) {
                     ResetWifiConfiguration();
-                }
             }
             app.ToggleChatState();
         });
@@ -185,8 +130,6 @@ private:
             ESP_LOGW(TAG, "Key button long press released, entering deep sleep mode");
             // ESP32-C3 使用 GPIO 唤醒方式进入深度睡眠
             _register_gpio_wakeup();
-            _deinitCodecI2c();
-            _deinitDisplay();
             esp_deep_sleep_start();
 
         });
