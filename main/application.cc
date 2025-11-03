@@ -101,7 +101,7 @@ Application::~Application() {
 }
 
 void Application::CheckNewVersion() {
-    const int MAX_RETRY = 10;
+    const int MAX_RETRY = 2;
     int retry_count = 0;
     int retry_delay = 10; // 初始重试延迟为10秒
 

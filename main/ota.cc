@@ -71,6 +71,7 @@ Http* Ota::SetupHttp() {
  * Specification: https://ccnphfhqs21z.feishu.cn/wiki/FjW6wZmisimNBBkov6OcmfvknVd
  */
 bool Ota::CheckVersion() {
+    has_new_version_ = false;
     auto& board = Board::GetInstance();
     auto app_desc = esp_app_get_description();
 
