@@ -45,19 +45,43 @@ private:
         power_save_timer_->OnEnterSleepMode([this]() {
             ESP_LOGI(TAG, "Enabling sleep mode");            
             auto codec = GetAudioCodec();
-            codec->EnableInput(false);
+            // 只在输入已启用的情况下才禁用，避免在未初始化时调用
+            if (codec && codec->input_enabled()) {
+                codec->EnableInput(false);
+            }
         });
         power_save_timer_->OnExitSleepMode([this]() {
             auto codec = GetAudioCodec();
-            codec->EnableInput(true);
-            codec->SetOutputVolume(70); // 恢复音量            
+            if (codec) {
+                codec->EnableInput(true);
+                codec->SetOutputVolume(70); // 恢复音量
+            }
         });
         
         power_save_timer_->OnShutdownRequest([this]() {
-            ESP_LOGI(TAG, "Shutdown request received");
-            // 配置GPIO唤醒源
+            ESP_LOGI(TAG, "Shutdown request received, cleaning up resources before deep sleep");
+            
+            // 1. 停止音频编解码器
+            auto codec = GetAudioCodec();
+            if (codec) {
+                ESP_LOGI(TAG, "Disabling audio codec");
+                codec->EnableInput(false);
+                codec->EnableOutput(false);
+                // 给足够时间让音频操作完成
+                vTaskDelay(pdMS_TO_TICKS(100));
+            }
+            
+            // 2. 清理显示器（如果有活动内容）
+            if (display_) {
+                ESP_LOGI(TAG, "Clearing display");
+                display_->SetChatMessage("system", "");
+            }
+            
+            // 3. 配置GPIO唤醒源
             _register_gpio_wakeup();
-            // 进入深度睡眠
+            
+            // 4. 进入深度睡眠
+            ESP_LOGI(TAG, "Entering deep sleep mode");
             esp_deep_sleep_start();
         });
 
@@ -127,11 +151,26 @@ private:
 
         // 修正：长按直接进入深度休眠，唤醒后自动复位，无需恢复外设
         boot_button_.OnLongPressUp([this]() {
-            ESP_LOGW(TAG, "Key button long press released, entering deep sleep mode");
-            // ESP32-C3 使用 GPIO 唤醒方式进入深度睡眠
+            ESP_LOGW(TAG, "Key button long press released, cleaning up and entering deep sleep mode");
+            
+            // 1. 停止音频编解码器
+            auto codec = GetAudioCodec();
+            if (codec) {
+                ESP_LOGI(TAG, "Disabling audio codec");
+                codec->EnableInput(false);
+                codec->EnableOutput(false);
+                vTaskDelay(pdMS_TO_TICKS(100));
+            }
+            
+            // 2. 清理显示器
+            if (display_) {
+                display_->SetChatMessage("system", "Sleeping...");
+                vTaskDelay(pdMS_TO_TICKS(500)); // 让用户看到消息
+            }
+            
+            // 3. ESP32-C3 使用 GPIO 唤醒方式进入深度睡眠
             _register_gpio_wakeup();
             esp_deep_sleep_start();
-
         });
 
         // 三击直接进入配网
