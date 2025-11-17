@@ -50,7 +50,9 @@ enum DeviceState {
 
 #define OPUS_FRAME_DURATION_MS 60
 #define MAX_AUDIO_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
+#ifdef CONFIG_ENABLE_AUDIO_TESTING_IN_WIFI_CONFIG
 #define AUDIO_TESTING_MAX_DURATION_MS 10000
+#endif
 
 class Application {
 public:
@@ -82,6 +84,7 @@ public:
     void SetAecMode(AecMode mode);
     AecMode GetAecMode() const { return aec_mode_; }
     BackgroundTask* GetBackgroundTask() const { return background_task_; }
+    void WaitForAudioPlayback();
 
 private:
     Application();
@@ -113,7 +116,9 @@ private:
     std::list<AudioStreamPacket> audio_send_queue_;
     std::list<AudioStreamPacket> audio_decode_queue_;
     std::condition_variable audio_decode_cv_;
+#ifdef CONFIG_ENABLE_AUDIO_TESTING_IN_WIFI_CONFIG
     std::list<AudioStreamPacket> audio_testing_queue_;
+#endif
 
     // 新增：用于维护音频包的timestamp队列
     std::list<uint32_t> timestamp_queue_;
@@ -137,8 +142,10 @@ private:
     void OnClockTimer();
     void SetListeningMode(ListeningMode mode);
     void AudioLoop();
+#ifdef CONFIG_ENABLE_AUDIO_TESTING_IN_WIFI_CONFIG
     void EnterAudioTestingMode();
     void ExitAudioTestingMode();
+#endif
 };
 
 #endif // _APPLICATION_H_

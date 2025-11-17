@@ -9,7 +9,7 @@
 #include "config.h"
 #include "power_save_timer.h"
 #include "font_awesome_symbols.h"
-
+#include "assets/lang_config.h"
 #include <wifi_station.h>
 #include <esp_log.h>
 #include <esp_efuse_table.h>
@@ -38,45 +38,37 @@ private:
     Button boot_button_;
 
     PowerSaveTimer* power_save_timer_ = nullptr;
+    
+    // 标记是否从深度睡眠唤醒,以及启动时间戳
+    bool woke_from_deep_sleep_ = false;
 
     void InitializePowerSaveTimer() {
 
-        power_save_timer_ = new PowerSaveTimer(-1, 60, 300);
+        power_save_timer_ = new PowerSaveTimer(-1, 120, 300);
         power_save_timer_->OnEnterSleepMode([this]() {
-            ESP_LOGI(TAG, "Enabling sleep mode");            
-            auto codec = GetAudioCodec();
-            // 只在输入已启用的情况下才禁用，避免在未初始化时调用
-            if (codec && codec->input_enabled()) {
-                codec->EnableInput(false);
-            }
+            ESP_LOGI(TAG, "Enabling light sleep mode");            
+
         });
         power_save_timer_->OnExitSleepMode([this]() {
-            auto codec = GetAudioCodec();
-            if (codec) {
-                codec->EnableInput(true);
-                codec->SetOutputVolume(70); // 恢复音量
-            }
+            ESP_LOGI(TAG, "Exit light sleep mode");    
         });
         
         power_save_timer_->OnShutdownRequest([this]() {
             ESP_LOGI(TAG, "Shutdown request received, cleaning up resources before deep sleep");
-            
-            // 1. 停止音频编解码器
+            auto& app = Application::GetInstance();
+
+            app.Alert(Lang::Strings::BATTERY_SLEEP, Lang::Strings::BATTERY_SLEEP, "neutral", Lang::Sounds::P3_SLEEP);
+            // Wait for audio to finish playing
+            app.WaitForAudioPlayback();
+            app.SetDeviceState(kDeviceStateIdle);
+
             auto codec = GetAudioCodec();
             if (codec) {
                 ESP_LOGI(TAG, "Disabling audio codec");
                 codec->EnableInput(false);
                 codec->EnableOutput(false);
-                // 给足够时间让音频操作完成
-                vTaskDelay(pdMS_TO_TICKS(100));
+                vTaskDelay(pdMS_TO_TICKS(1000));
             }
-            
-            // 2. 清理显示器（如果有活动内容）
-            if (display_) {
-                ESP_LOGI(TAG, "Clearing display");
-                display_->SetChatMessage("system", "");
-            }
-            
             // 3. 配置GPIO唤醒源
             _register_gpio_wakeup();
             
@@ -144,30 +136,36 @@ private:
         boot_button_.OnClick([this]() {
             auto& app = Application::GetInstance();
             if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
-                    ResetWifiConfiguration();
+                    // 检测是否是深度睡眠唤醒后的误触发. 如果是从深度睡眠唤醒,忽略首次点击
+                    if (woke_from_deep_sleep_) {
+                        ESP_LOGI(TAG, "Ignoring first click after wake from deep sleep");                        
+                    }
+                    else {
+                        ESP_LOGI(TAG, "Entering WiFi configuration mode");
+                        ResetWifiConfiguration();
+                    }
             }
+            woke_from_deep_sleep_ = false;
             app.ToggleChatState();
         });
 
         // 修正：长按直接进入深度休眠，唤醒后自动复位，无需恢复外设
         boot_button_.OnLongPressUp([this]() {
             ESP_LOGW(TAG, "Key button long press released, cleaning up and entering deep sleep mode");
-            
+            auto& app = Application::GetInstance();
+
+            app.Alert(Lang::Strings::BATTERY_SLEEP, Lang::Strings::BATTERY_SLEEP, "neutral", Lang::Sounds::P3_SLEEP);
+            // Wait for audio to finish playing
+            app.WaitForAudioPlayback();
+            app.SetDeviceState(kDeviceStateIdle);
             // 1. 停止音频编解码器
             auto codec = GetAudioCodec();
             if (codec) {
                 ESP_LOGI(TAG, "Disabling audio codec");
                 codec->EnableInput(false);
                 codec->EnableOutput(false);
-                vTaskDelay(pdMS_TO_TICKS(100));
+                vTaskDelay(pdMS_TO_TICKS(1000));
             }
-            
-            // 2. 清理显示器
-            if (display_) {
-                display_->SetChatMessage("system", "Sleeping...");
-                vTaskDelay(pdMS_TO_TICKS(500)); // 让用户看到消息
-            }
-            
             // 3. ESP32-C3 使用 GPIO 唤醒方式进入深度睡眠
             _register_gpio_wakeup();
             esp_deep_sleep_start();
@@ -190,13 +188,23 @@ private:
     // 物联网初始化，添加对 AI 可见设备
     void InitializeIot() {
         Settings settings("vendor");
+#if CONFIG_IOT_PROTOCOL_XIAOZHI        
         auto& thing_manager = iot::ThingManager::GetInstance();
         thing_manager.AddThing(iot::CreateThing("Speaker"));
+#endif  
     }
 
 public:
     FriendC3Board() : boot_button_(BOOT_BUTTON_GPIO) {  
 		ESP_LOGI(TAG, "enter FriendC3Board  construct func");
+     
+        // 检测是否从深度睡眠唤醒
+        esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
+        if (wakeup_reason == ESP_SLEEP_WAKEUP_GPIO) {
+            woke_from_deep_sleep_ = true;
+            ESP_LOGI(TAG, "Woke up from deep sleep by GPIO");
+        }
+        
         // 把 ESP32C3 的 VDD SPI 引脚作为普通 GPIO 口使用
         esp_efuse_write_field_bit(ESP_EFUSE_VDD_SPI_AS_GPIO);
 

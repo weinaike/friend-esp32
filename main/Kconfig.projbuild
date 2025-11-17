@@ -414,6 +414,14 @@ config AUDIO_DEBUG_UDP_SERVER
     help
         UDP服务器地址，格式: IP:PORT，用于接收音频调试数据
 
+config ENABLE_AUDIO_TESTING_IN_WIFI_CONFIG
+    bool "Enable Audio Testing in WiFi Config Mode"
+    default n
+    help
+        启用WiFi配置模式下的音频测试功能。
+        开启后，在WiFi配置状态下可以通过Toggle按钮进入音频测试模式，
+        录制音频后再次按Toggle退出并播放录制的音频。
+
 choice IOT_PROTOCOL
     prompt "IoT Protocol"
     default IOT_PROTOCOL_MCP

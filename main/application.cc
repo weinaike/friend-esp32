@@ -136,13 +136,12 @@ void Application::CheckNewVersion() {
 
         if (ota_.HasNewVersion()) {
             Alert(Lang::Strings::OTA_UPGRADE, Lang::Strings::UPGRADING, "happy", Lang::Sounds::P3_UPGRADE);
-
-            vTaskDelay(pdMS_TO_TICKS(3000));
+            // vTaskDelay(pdMS_TO_TICKS(3000));
 
             SetDeviceState(kDeviceStateUpgrading);
             
-            display->SetIcon(FONT_AWESOME_DOWNLOAD);
-            std::string message = std::string(Lang::Strings::NEW_VERSION) + ota_.GetFirmwareVersion();
+            display->SetIcon(FONT_AWESOME_DOWNLOAD);            
+            std::string message = std::string(Lang::Strings::NEW_VERSION) + ota_.GetFirmwareVersion();            
             display->SetChatMessage("system", message.c_str());
 
             auto& board = Board::GetInstance();
@@ -168,9 +167,12 @@ void Application::CheckNewVersion() {
             });
 
             // If upgrade success, the device will reboot and never reach here
-            display->SetStatus(Lang::Strings::UPGRADE_FAILED);
+            // display->SetStatus(Lang::Strings::UPGRADE_FAILED);
+            Alert(Lang::Strings::OTA_UPGRADE, Lang::Strings::UPGRADE_FAILED, "sad", Lang::Sounds::P3_UPGRADE_FAILED);
+            // Wait for audio to finish playing
+            WaitForAudioPlayback();
             ESP_LOGI(TAG, "Firmware upgrade failed...");
-            vTaskDelay(pdMS_TO_TICKS(3000));
+            vTaskDelay(pdMS_TO_TICKS(1000));
             Reboot();
             return;
         }
@@ -294,6 +296,7 @@ void Application::PlaySound(const std::string_view& sound) {
     }
 }
 
+#ifdef CONFIG_ENABLE_AUDIO_TESTING_IN_WIFI_CONFIG
 void Application::EnterAudioTestingMode() {
     ESP_LOGI(TAG, "Entering audio testing mode");
     ResetDecoder();
@@ -308,18 +311,27 @@ void Application::ExitAudioTestingMode() {
     audio_decode_queue_ = std::move(audio_testing_queue_);
     audio_decode_cv_.notify_all();
 }
+#endif
 
 void Application::ToggleChatState() {
     if (device_state_ == kDeviceStateActivating) {
         SetDeviceState(kDeviceStateIdle);
         return;
-    } else if (device_state_ == kDeviceStateWifiConfiguring) {
+    }
+#ifdef CONFIG_ENABLE_AUDIO_TESTING_IN_WIFI_CONFIG
+    else if (device_state_ == kDeviceStateWifiConfiguring) {
         EnterAudioTestingMode();
         return;
     } else if (device_state_ == kDeviceStateAudioTesting) {
         ExitAudioTestingMode();
         return;
     }
+#else
+    else if (device_state_ == kDeviceStateWifiConfiguring) {
+        Alert(Lang::Strings::WIFI_CONFIG_MODE, Lang::Strings::EXIT_WIFI_CONFIG_HINT,"neutral",Lang::Sounds::P3_EXIT_WIFICONFIG);
+        return;
+    }
+#endif
 
     if (!protocol_) {
         ESP_LOGE(TAG, "Protocol not initialized");
@@ -346,6 +358,7 @@ void Application::ToggleChatState() {
     } else if (device_state_ == kDeviceStateListening) {
         Schedule([this]() {
             protocol_->CloseAudioChannel();
+            SetDeviceState(kDeviceStateIdle);
         });
     }
 }
@@ -355,7 +368,9 @@ void Application::StartListening() {
         SetDeviceState(kDeviceStateIdle);
         return;
     } else if (device_state_ == kDeviceStateWifiConfiguring) {
+#ifdef CONFIG_ENABLE_AUDIO_TESTING_IN_WIFI_CONFIG        
         EnterAudioTestingMode();
+#endif
         return;
     }
 
@@ -384,10 +399,12 @@ void Application::StartListening() {
 }
 
 void Application::StopListening() {
+#ifdef CONFIG_ENABLE_AUDIO_TESTING_IN_WIFI_CONFIG    
     if (device_state_ == kDeviceStateAudioTesting) {
         ExitAudioTestingMode();
         return;
     }
+#endif
 
     const std::array<int, 3> valid_states = {
         kDeviceStateListening,
@@ -711,9 +728,14 @@ void Application::Start() {
         std::string message = std::string(Lang::Strings::VERSION) + ota_.GetCurrentVersion();
         display->ShowNotification(message.c_str());
         display->SetChatMessage("system", "");
-        // Play the success sound to indicate the device is ready
-        ResetDecoder();
-        PlaySound(Lang::Sounds::P3_SUCCESS);
+        // // Play the success sound to indicate the device is ready
+        // ResetDecoder();
+        // PlaySound(Lang::Sounds::P3_SUCCESS);        
+        // Alert(Lang::Strings::STANDBY, message.c_str(), "happy", Lang::Sounds::P3_SUCCESS);
+        // 如果是 IDLE 状态，触发toggle, 主动发起对话
+        if (device_state_ == kDeviceStateIdle) {
+            ToggleChatState();
+        }
     }
 
     // Print heap stats
@@ -859,6 +881,7 @@ void Application::OnAudioOutput() {
 }
 
 void Application::OnAudioInput() {
+#ifdef CONFIG_ENABLE_AUDIO_TESTING_IN_WIFI_CONFIG
     if (device_state_ == kDeviceStateAudioTesting) {
         if (audio_testing_queue_.size() >= AUDIO_TESTING_MAX_DURATION_MS / OPUS_FRAME_DURATION_MS) {
             ExitAudioTestingMode();
@@ -880,6 +903,7 @@ void Application::OnAudioInput() {
             return;
         }
     }
+#endif
 
     if (wake_word_->IsDetectionRunning()) {
         std::vector<int16_t> data;
@@ -985,8 +1009,10 @@ void Application::SetDeviceState(DeviceState state) {
         case kDeviceStateIdle:
             display->SetStatus(Lang::Strings::STANDBY);
             display->SetEmotion("neutral");
+            Alert(Lang::Strings::STANDBY, Lang::Strings::STANDBY, "happy", Lang::Sounds::P3_SUCCESS);
+            WaitForAudioPlayback();
             audio_processor_->Stop();
-            wake_word_->StartDetection();
+            wake_word_->StartDetection();            
             break;
         case kDeviceStateConnecting:
             display->SetStatus(Lang::Strings::CONNECTING);
@@ -1001,7 +1027,6 @@ void Application::SetDeviceState(DeviceState state) {
 #if CONFIG_IOT_PROTOCOL_XIAOZHI
             UpdateIotStates();
 #endif
-
             // Make sure the audio processor is running
             if (!audio_processor_->IsRunning()) {
                 // Send the start listening command
@@ -1099,7 +1124,8 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
 }
 
 bool Application::CanEnterSleepMode() {
-    if (device_state_ != kDeviceStateIdle) {
+    // Allow sleep in idle state or WiFi configuration mode
+    if (device_state_ != kDeviceStateIdle && device_state_ != kDeviceStateWifiConfiguring) {
         return false;
     }
 
@@ -1144,4 +1170,15 @@ void Application::SetAecMode(AecMode mode) {
             protocol_->CloseAudioChannel();
         }
     });
+}
+
+void Application::WaitForAudioPlayback() {
+    // Wait for audio decode queue to be empty
+    std::unique_lock<std::mutex> lock(mutex_);
+    audio_decode_cv_.wait(lock, [this]() {
+        return audio_decode_queue_.empty();
+    });
+    lock.unlock();
+    // Wait for background tasks to complete
+    background_task_->WaitForCompletion();
 }
