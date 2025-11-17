@@ -56,11 +56,12 @@ private:
         power_save_timer_->OnShutdownRequest([this]() {
             ESP_LOGI(TAG, "Shutdown request received, cleaning up resources before deep sleep");
             auto& app = Application::GetInstance();
-
+            app.SetDeviceState(kDeviceStateIdle);
+            vTaskDelay(pdMS_TO_TICKS(100));
             app.Alert(Lang::Strings::BATTERY_SLEEP, Lang::Strings::BATTERY_SLEEP, "neutral", Lang::Sounds::P3_SLEEP);
             // Wait for audio to finish playing
             app.WaitForAudioPlayback();
-            app.SetDeviceState(kDeviceStateIdle);
+            
 
             auto codec = GetAudioCodec();
             if (codec) {
@@ -153,11 +154,12 @@ private:
         boot_button_.OnLongPressUp([this]() {
             ESP_LOGW(TAG, "Key button long press released, cleaning up and entering deep sleep mode");
             auto& app = Application::GetInstance();
-
+            app.SetDeviceState(kDeviceStateIdle);
+            vTaskDelay(pdMS_TO_TICKS(100));
             app.Alert(Lang::Strings::BATTERY_SLEEP, Lang::Strings::BATTERY_SLEEP, "neutral", Lang::Sounds::P3_SLEEP);
             // Wait for audio to finish playing
             app.WaitForAudioPlayback();
-            app.SetDeviceState(kDeviceStateIdle);
+            
             // 1. 停止音频编解码器
             auto codec = GetAudioCodec();
             if (codec) {

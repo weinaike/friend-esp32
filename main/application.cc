@@ -731,11 +731,6 @@ void Application::Start() {
         // // Play the success sound to indicate the device is ready
         // ResetDecoder();
         // PlaySound(Lang::Sounds::P3_SUCCESS);        
-        // Alert(Lang::Strings::STANDBY, message.c_str(), "happy", Lang::Sounds::P3_SUCCESS);
-        // 如果是 IDLE 状态，触发toggle, 主动发起对话
-        if (device_state_ == kDeviceStateIdle) {
-            ToggleChatState();
-        }
     }
 
     // Print heap stats
