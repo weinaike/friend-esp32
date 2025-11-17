@@ -4,9 +4,9 @@
 
 #define TAG "SingleLed"
 
-#define DEFAULT_BRIGHTNESS 8
-#define HIGH_BRIGHTNESS 16
-#define LOW_BRIGHTNESS 8
+#define DEFAULT_BRIGHTNESS 16
+#define HIGH_BRIGHTNESS 32
+#define LOW_BRIGHTNESS 16
 
 #define BLINK_INFINITE -1
 

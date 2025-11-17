@@ -1005,7 +1005,7 @@ void Application::SetDeviceState(DeviceState state) {
             display->SetStatus(Lang::Strings::STANDBY);
             display->SetEmotion("neutral");
             Alert(Lang::Strings::STANDBY, Lang::Strings::STANDBY, "happy", Lang::Sounds::P3_SUCCESS);
-            WaitForAudioPlayback();
+            vTaskDelay(pdMS_TO_TICKS(1000));
             audio_processor_->Stop();
             wake_word_->StartDetection();            
             break;
